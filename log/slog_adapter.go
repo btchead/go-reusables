@@ -14,9 +14,9 @@ type SlogAdapter struct {
 	options *options
 }
 
-func (o *SlogAdapter) New(config Config, writer io.Writer) Logger {
+func (o *SlogAdapter) New(config Config, writer WriteSyncer) Logger {
 	if writer == nil {
-		writer = os.Stdout
+		writer = NewStdoutWriteSyncer()
 	}
 
 	// Set log level

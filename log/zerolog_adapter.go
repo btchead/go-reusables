@@ -2,8 +2,6 @@ package log
 
 import (
 	"context"
-	"io"
-	"os"
 
 	"github.com/rs/zerolog"
 )
@@ -13,9 +11,9 @@ type ZerologAdapter struct {
 }
 
 // New creates a new zerolog-based logger
-func (o *ZerologAdapter) New(config Config, writer io.Writer) Logger {
+func (o *ZerologAdapter) New(config Config, writer WriteSyncer) Logger {
 	if writer == nil {
-		writer = os.Stdout
+		writer = NewStdoutWriteSyncer()
 	}
 
 	// Set log level
