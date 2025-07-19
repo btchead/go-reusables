@@ -1,4 +1,4 @@
-# Logger Package
+# 📝 Logger Package
 
 Unified logging interface supporting zerolog and slog backends.
 

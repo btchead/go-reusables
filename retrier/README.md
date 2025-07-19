@@ -1,4 +1,4 @@
-# Retrier Package
+# 🔄 Retrier Package
 
 Flexible retry package with multiple strategies, error classification, and execution modes.
 
