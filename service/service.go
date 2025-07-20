@@ -125,6 +125,7 @@ type Manager struct {
 	waitGroup       sync.WaitGroup
 	ctx             context.Context
 	cancel          context.CancelFunc
+	serviceSequence ServiceSequence
 }
 
 // ServiceState represents the current state of a service
@@ -157,6 +158,7 @@ func NewManager(options ...Option) *Manager {
 		logger:          NoOpLogger{},
 		ctx:             ctx,
 		cancel:          cancel,
+		serviceSequence: SequenceNone,
 	}
 
 	for _, opt := range options {
@@ -223,51 +225,17 @@ func (o *Manager) Start(ctx context.Context) error {
 
 	o.logger.Info("Starting all services", "count", len(o.services))
 
-	for _, state := range o.services {
-		if state.getState() == StateRunning {
-			o.logger.Debug("Service already running, skipping", "service", state.service.Name())
-			continue
-		}
-
-		o.logger.Debug("Starting service", "service", state.service.Name())
-		state.setState(StateStarting)
-
-		// Start service in a goroutine so it can run independently
-		state.wg.Add(1)
-		o.waitGroup.Add(1)
-		go func(s *serviceState) {
-			defer s.wg.Done()
-			defer o.waitGroup.Done()
-
-			if err := s.service.Start(s.ctx); err != nil {
-				o.logger.Error("Service failed during execution", "service", s.service.Name(), "error", err)
-				s.setError(err)
-				s.setState(StateError)
-				return
-			}
-
-			// Service.Start should block until the service stops
-			// When it returns without error, the service has stopped cleanly
-			s.setState(StateStopped)
-			o.logger.Info("Service stopped cleanly", "service", s.service.Name())
-		}(state)
-
-		// Give the service a moment to start up
-		time.Sleep(10 * time.Millisecond)
-
-		// Check if service failed to start
-		if state.getState() == StateError {
-			o.logger.Error("Service start failed, stopping all services", "service", state.service.Name())
-			o.stopAllServices(ctx)
-			return fmt.Errorf("failed to start service '%s': %w", state.service.Name(), state.getError())
-		}
-
-		state.setState(StateRunning)
-		o.logger.Info("Service started successfully", "service", state.service.Name())
+	// Start services based on sequence configuration
+	switch o.serviceSequence {
+	case SequenceNone:
+		return o.startServicesParallel(ctx)
+	case SequenceFIFO:
+		return o.startServicesSequential(ctx, false)
+	case SequenceLIFO:
+		return o.startServicesSequential(ctx, true)
+	default:
+		return o.startServicesParallel(ctx)
 	}
-
-	o.logger.Info("All services started successfully")
-	return nil
 }
 
 // Stop stops all running services in reverse order
@@ -278,39 +246,122 @@ func (o *Manager) Stop(ctx context.Context) error {
 	return o.stopAllServices(ctx)
 }
 
+// startServicesParallel starts all services in parallel
+func (o *Manager) startServicesParallel(ctx context.Context) error {
+	errChan := make(chan error, len(o.services))
+	startedServices := make([]*serviceState, 0, len(o.services))
+
+	for _, state := range o.services {
+		if state.getState() == StateRunning {
+			o.logger.Debug("Service already running, skipping", "service", state.service.Name())
+			continue
+		}
+
+		startedServices = append(startedServices, state)
+		go o.startSingleService(state, errChan)
+	}
+
+	// Wait for all services to start or fail
+	for range startedServices {
+		if err := <-errChan; err != nil {
+			o.logger.Error("Service start failed, stopping all services", "error", err)
+			o.stopAllServices(ctx)
+			return err
+		}
+	}
+
+	o.logger.Info("All services started successfully")
+	return nil
+}
+
+// startServicesSequential starts services in sequence (FIFO or LIFO)
+func (o *Manager) startServicesSequential(ctx context.Context, reverse bool) error {
+	services := o.services
+	if reverse {
+		services = make([]*serviceState, len(o.services))
+		copy(services, o.services)
+		for i, j := 0, len(services)-1; i < j; i, j = i+1, j-1 {
+			services[i], services[j] = services[j], services[i]
+		}
+	}
+
+	for _, state := range services {
+		if state.getState() == StateRunning {
+			o.logger.Debug("Service already running, skipping", "service", state.service.Name())
+			continue
+		}
+
+		errChan := make(chan error, 1)
+		go o.startSingleService(state, errChan)
+
+		if err := <-errChan; err != nil {
+			o.logger.Error("Service start failed, stopping all services", "error", err)
+			o.stopAllServices(ctx)
+			return err
+		}
+	}
+
+	o.logger.Info("All services started successfully")
+	return nil
+}
+
+// startSingleService starts a single service and reports the result
+func (o *Manager) startSingleService(state *serviceState, errChan chan<- error) {
+	o.logger.Debug("Starting service", "service", state.service.Name())
+	state.setState(StateStarting)
+
+	// Start service in a goroutine so it can run independently
+	state.wg.Add(1)
+	o.waitGroup.Add(1)
+	go func() {
+		defer state.wg.Done()
+		defer o.waitGroup.Done()
+
+		if err := state.service.Start(state.ctx); err != nil {
+			o.logger.Error("Service failed during execution", "service", state.service.Name(), "error", err)
+			state.setError(err)
+			state.setState(StateError)
+			return
+		}
+
+		// Service.Start should block until the service stops
+		// When it returns without error, the service has stopped cleanly
+		state.setState(StateStopped)
+		o.logger.Info("Service stopped cleanly", "service", state.service.Name())
+	}()
+
+	// Give the service a moment to start up
+	time.Sleep(10 * time.Millisecond)
+
+	// Check if service failed to start
+	if state.getState() == StateError {
+		errChan <- fmt.Errorf("failed to start service '%s': %w", state.service.Name(), state.getError())
+		return
+	}
+
+	state.setState(StateRunning)
+	o.logger.Info("Service started successfully", "service", state.service.Name())
+	errChan <- nil
+}
+
 // stopAllServices stops all services (internal helper, assumes lock is held)
 func (o *Manager) stopAllServices(ctx context.Context) error {
 	var errors []error
 
 	o.logger.Info("Stopping all services", "count", len(o.services))
 
-	// Stop services in reverse order
-	for i := len(o.services) - 1; i >= 0; i-- {
-		state := o.services[i]
-		if state.getState() == StateStopped {
-			o.logger.Debug("Service already stopped, skipping", "service", state.service.Name())
-			continue
-		}
-
-		o.logger.Debug("Stopping service", "service", state.service.Name())
-		state.setState(StateStopping)
-
-		// Cancel the service context
-		state.cancel()
-
-		if err := state.service.Stop(ctx); err != nil {
-			o.logger.Error("Service stop failed", "service", state.service.Name(), "error", err)
-			state.setError(err)
-			state.setState(StateError)
-			errors = append(errors, fmt.Errorf("failed to stop service '%s': %w", state.service.Name(), err))
-		} else {
-			o.logger.Info("Service stop initiated", "service", state.service.Name())
-		}
-
-		// Wait for service goroutines to complete
-		o.logger.Debug("Waiting for service goroutines to complete", "service", state.service.Name())
-		state.wg.Wait()
-		o.logger.Debug("Service goroutines completed", "service", state.service.Name())
+	// Stop services based on sequence configuration
+	switch o.serviceSequence {
+	case SequenceNone:
+		errors = append(errors, o.stopServicesParallel(ctx)...)
+	case SequenceFIFO:
+		// FIFO start means LIFO stop
+		errors = append(errors, o.stopServicesSequential(ctx, true)...)
+	case SequenceLIFO:
+		// LIFO start means FIFO stop
+		errors = append(errors, o.stopServicesSequential(ctx, false)...)
+	default:
+		errors = append(errors, o.stopServicesParallel(ctx)...)
 	}
 
 	if len(errors) > 0 {
@@ -319,6 +370,82 @@ func (o *Manager) stopAllServices(ctx context.Context) error {
 	}
 
 	o.logger.Info("All services stopped successfully")
+	return nil
+}
+
+// stopServicesParallel stops all services in parallel
+func (o *Manager) stopServicesParallel(ctx context.Context) []error {
+	var wg sync.WaitGroup
+	errors := make([]error, 0)
+	errorMutex := sync.Mutex{}
+
+	for _, state := range o.services {
+		if state.getState() == StateStopped {
+			o.logger.Debug("Service already stopped, skipping", "service", state.service.Name())
+			continue
+		}
+
+		wg.Add(1)
+		go func(s *serviceState) {
+			defer wg.Done()
+			if err := o.stopSingleService(ctx, s); err != nil {
+				errorMutex.Lock()
+				errors = append(errors, err)
+				errorMutex.Unlock()
+			}
+		}(state)
+	}
+
+	wg.Wait()
+	return errors
+}
+
+// stopServicesSequential stops services in sequence
+func (o *Manager) stopServicesSequential(ctx context.Context, reverse bool) []error {
+	services := o.services
+	if reverse {
+		services = make([]*serviceState, len(o.services))
+		copy(services, o.services)
+		for i, j := 0, len(services)-1; i < j; i, j = i+1, j-1 {
+			services[i], services[j] = services[j], services[i]
+		}
+	}
+
+	errors := make([]error, 0)
+	for _, state := range services {
+		if state.getState() == StateStopped {
+			o.logger.Debug("Service already stopped, skipping", "service", state.service.Name())
+			continue
+		}
+
+		if err := o.stopSingleService(ctx, state); err != nil {
+			errors = append(errors, err)
+		}
+	}
+
+	return errors
+}
+
+// stopSingleService stops a single service
+func (o *Manager) stopSingleService(ctx context.Context, state *serviceState) error {
+	o.logger.Debug("Stopping service", "service", state.service.Name())
+	state.setState(StateStopping)
+
+	// Cancel the service context
+	state.cancel()
+
+	if err := state.service.Stop(ctx); err != nil {
+		o.logger.Error("Service stop failed", "service", state.service.Name(), "error", err)
+		state.setError(err)
+		state.setState(StateError)
+		return fmt.Errorf("failed to stop service '%s': %w", state.service.Name(), err)
+	}
+
+	// Wait for service goroutines to complete
+	o.logger.Debug("Waiting for service goroutines to complete", "service", state.service.Name())
+	state.wg.Wait()
+	o.logger.Debug("Service goroutines completed", "service", state.service.Name())
+	o.logger.Info("Service stopped successfully", "service", state.service.Name())
 	return nil
 }
 
@@ -566,4 +693,9 @@ func (o *Manager) WaitForAllServices() {
 	o.logger.Debug("Waiting for all services to complete")
 	o.waitGroup.Wait()
 	o.logger.Info("All services completed")
+}
+
+// Context returns the manager's context
+func (o *Manager) Context() context.Context {
+	return o.ctx
 }

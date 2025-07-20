@@ -46,3 +46,10 @@ func WithContext(ctx context.Context) Option {
 		m.ctx, m.cancel = context.WithCancel(ctx)
 	}
 }
+
+// WithServiceSequence sets the service startup/shutdown sequence
+func WithServiceSequence(sequence ServiceSequence) Option {
+	return func(m *Manager) {
+		m.serviceSequence = sequence
+	}
+}
