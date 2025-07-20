@@ -44,6 +44,19 @@ A comprehensive service management package that handles service registration, li
 - Customizable shutdown timeout periods
 - Clean `NewService()` constructor to minimize boilerplate
 
+### ⚙️ [config](./config/) - Configuration Management
+
+A comprehensive configuration package with YAML parsing, validation, and template generation for type-safe configuration management.
+
+**Features:**
+- Type-safe generic configuration loading
+- YAML parsing with validation using struct tags
+- Default value support via struct tags
+- Configuration template generation with comments
+- Multiple loading options (file, byte data)
+- Built-in validation using go-playground/validator
+- Convenient helper functions for common use cases
+
 ## License
 
 MIT License - see [LICENSE](./LICENSE) file for details.
