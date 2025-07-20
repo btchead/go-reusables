@@ -1,0 +1,68 @@
+version: 2
+updates:
+  # Enable version updates for Go modules in each package
+  - package-ecosystem: "gomod"
+    directory: "/config"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
+    assignees:
+      - "@me"
+    commit-message:
+      prefix: "deps(config)"
+      include: "scope"
+
+  - package-ecosystem: "gomod"
+    directory: "/log"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
+    assignees:
+      - "@me"
+    commit-message:
+      prefix: "deps(log)"
+      include: "scope"
+
+  - package-ecosystem: "gomod"
+    directory: "/retrier"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
+    assignees:
+      - "@me"
+    commit-message:
+      prefix: "deps(retrier)"
+      include: "scope"
+
+  - package-ecosystem: "gomod"
+    directory: "/service"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
+    assignees:
+      - "@me"
+    commit-message:
+      prefix: "deps(service)"
+      include: "scope"
+
+  # GitHub Actions workflow dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    assignees:
+      - "@me"
+    commit-message:
+      prefix: "deps(actions)"
+      include: "scope"
