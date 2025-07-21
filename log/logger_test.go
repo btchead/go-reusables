@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/go-reusables/log"
+	"github.com/btchead/go-reusables/log"
 )
 
 func Test_Logger(t *testing.T) {

@@ -1,4 +1,4 @@
-module github.com/go-reusables/log
+module github.com/btchead/go-reusables/log
 
 go 1.24.5
 
